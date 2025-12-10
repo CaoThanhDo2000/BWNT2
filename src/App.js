@@ -1386,54 +1386,65 @@ const FuelManagementPanel = ({ isLoggedIn }) => {
   }, [newLog.startTime, newLog.endTime]);
 
   // --- SAVE LOG (CHẠY MÁY) ---
-// Nhớ thêm từ khóa async
-const handleSaveLog = async () => {
-  if (!selectedMachine || !newLog.date || !newLog.duration)
-    return alert("Thiếu thông tin!");
+  // Nhớ thêm từ khóa async
+  const handleSaveLog = async () => {
+    if (!selectedMachine || !newLog.date || !newLog.duration)
+      return alert("Thiếu thông tin!");
 
-  // --- Giữ nguyên logic tính toán cũ ---
-  let updatedLogs = [...selectedMachine.logs];
-  let fuelAdjustment = 0;
+    // --- Giữ nguyên logic tính toán cũ ---
+    let updatedLogs = [...selectedMachine.logs];
+    let fuelAdjustment = 0;
 
-  if (editingLogIndex !== null) {
-    const oldLog = updatedLogs[editingLogIndex];
-    if (oldLog.type === "run")
-      fuelAdjustment = (parseInt(oldLog.consumption) || 0) - (parseInt(newLog.consumption) || 0);
-    updatedLogs[editingLogIndex] = { ...newLog, type: "run" };
-  } else {
-    updatedLogs.push({ ...newLog, type: "run" });
-    fuelAdjustment = -(parseInt(newLog.consumption) || 0);
-  }
+    if (editingLogIndex !== null) {
+      const oldLog = updatedLogs[editingLogIndex];
+      if (oldLog.type === "run")
+        fuelAdjustment =
+          (parseInt(oldLog.consumption) || 0) -
+          (parseInt(newLog.consumption) || 0);
+      updatedLogs[editingLogIndex] = { ...newLog, type: "run" };
+    } else {
+      updatedLogs.push({ ...newLog, type: "run" });
+      fuelAdjustment = -(parseInt(newLog.consumption) || 0);
+    }
 
-  const updatedMachine = {
-    ...selectedMachine,
-    current: selectedMachine.current + fuelAdjustment,
-    logs: updatedLogs,
+    const updatedMachine = {
+      ...selectedMachine,
+      current: selectedMachine.current + fuelAdjustment,
+      logs: updatedLogs,
+    };
+    // -------------------------------------
+
+    // 1. Cập nhật UI
+    setFuelData((prev) =>
+      prev.map((m) => (m.id === selectedMachine.id ? updatedMachine : m))
+    );
+
+    // 2. Gửi lên Supabase - THÊM ĐOẠN NÀY
+    // Ta cập nhật lại mức dầu hiện tại (current_level) và toàn bộ mảng lịch sử (logs)
+    const { error } = await supabase
+      .from("fuel_logs")
+      .update({
+        current_level: updatedMachine.current,
+        logs: updatedMachine.logs, // Supabase tự lưu mảng này vào cột jsonb
+      })
+      .eq("id", selectedMachine.id);
+
+    if (error) alert("Lỗi lưu: " + error.message);
+
+    setShowLogModal(false);
+    // Reset form
+    setNewLog({
+      date: "",
+      startTime: "",
+      endTime: "",
+      duration: 0,
+      consumption: 0,
+      operator: "",
+      note: "",
+      images: [],
+    });
+    setEditingLogIndex(null);
   };
-  // -------------------------------------
-
-  // 1. Cập nhật UI
-  setFuelData((prev) =>
-    prev.map((m) => (m.id === selectedMachine.id ? updatedMachine : m))
-  );
-
-  // 2. Gửi lên Supabase - THÊM ĐOẠN NÀY
-  // Ta cập nhật lại mức dầu hiện tại (current_level) và toàn bộ mảng lịch sử (logs)
-  const { error } = await supabase
-    .from('fuel_logs')
-    .update({
-      current_level: updatedMachine.current,
-      logs: updatedMachine.logs // Supabase tự lưu mảng này vào cột jsonb
-    })
-    .eq('id', selectedMachine.id);
-
-  if (error) alert("Lỗi lưu: " + error.message);
-
-  setShowLogModal(false);
-  // Reset form
-  setNewLog({ date: "", startTime: "", endTime: "", duration: 0, consumption: 0, operator: "", note: "", images: [] });
-  setEditingLogIndex(null);
-};
 
   // --- SAVE REFUEL (CHÂM DẦU) ---
   const handleAddRefuel = () => {
@@ -2102,27 +2113,29 @@ const UtilityPanel = ({ isLoggedIn }) => {
 
   // 2. AUTO-SAVE & INIT DATA
   // Tự động gán tháng "2025-10" cho dữ liệu cũ chưa có trường 'month'
-// --- Code cũ: const [utilityData...] = useState(localStorage...)  <-- XÓA CÁI NÀY
-// --- Code mới:
-const [utilityData, setUtilityData] = useState([]);
+  // --- Code cũ: const [utilityData...] = useState(localStorage...)  <-- XÓA CÁI NÀY
+  // --- Code mới:
+  const [utilityData, setUtilityData] = useState([]);
 
-useEffect(() => {
-  const fetchUtility = async () => {
-    const { data, error } = await supabase.from('utility_readings').select('*');
-    if (data) {
-      // Chuyển đổi tên cột từ SQL (snake_case) sang React (camelCase)
-      const formatted = data.map(item => ({
-        ...item,
-        oldIndex: item.old_index,
-        newIndex: item.new_index,
-        lastMonthUsage: item.last_month_usage
-      }));
-      setUtilityData(formatted);
-    }
-    if (error) console.log("Lỗi tải điện nước:", error);
-  };
-  fetchUtility();
-}, []);
+  useEffect(() => {
+    const fetchUtility = async () => {
+      const { data, error } = await supabase
+        .from("utility_readings")
+        .select("*");
+      if (data) {
+        // Chuyển đổi tên cột từ SQL (snake_case) sang React (camelCase)
+        const formatted = data.map((item) => ({
+          ...item,
+          oldIndex: item.old_index,
+          newIndex: item.new_index,
+          lastMonthUsage: item.last_month_usage,
+        }));
+        setUtilityData(formatted);
+      }
+      if (error) console.log("Lỗi tải điện nước:", error);
+    };
+    fetchUtility();
+  }, []);
 
   // 3. LỌC DỮ LIỆU THEO THÁNG & LOẠI
   const filteredData = utilityData.filter((item) => {
@@ -2152,19 +2165,21 @@ useEffect(() => {
 
     // 1. Cập nhật giao diện (UI)
     setUtilityData((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, [field]: newValue } : item))
+      prev.map((item) =>
+        item.id === id ? { ...item, [field]: newValue } : item
+      )
     );
 
     // 2. Chuẩn bị tên cột cho khớp với SQL (SQL dùng snake_case)
     let dbField = field;
-    if (field === 'oldIndex') dbField = 'old_index';
-    if (field === 'newIndex') dbField = 'new_index';
-    
+    if (field === "oldIndex") dbField = "old_index";
+    if (field === "newIndex") dbField = "new_index";
+
     // 3. Gửi lên Supabase - THÊM ĐOẠN NÀY
     await supabase
-      .from('utility_readings')
+      .from("utility_readings")
       .update({ [dbField]: newValue })
-      .eq('id', id);
+      .eq("id", id);
   };
 
   // --- HÀM XỬ LÝ ẢNH (BASE64) ---
@@ -2196,46 +2211,46 @@ useEffect(() => {
   };
 
   // --- HÀM THÊM KHÁCH HÀNG MỚI (Tự động gán vào tháng đang chọn) ---
-// --- HÀM THÊM KHÁCH HÀNG MỚI (ĐÃ SỬA ĐỔI ĐỂ LƯU SUPABASE) ---
-const handleAddCustomer = async () => {
-  if (!newCustomer.tenant) return alert("Vui lòng nhập tên khách hàng!");
+  // --- HÀM THÊM KHÁCH HÀNG MỚI (ĐÃ SỬA ĐỔI ĐỂ LƯU SUPABASE) ---
+  const handleAddCustomer = async () => {
+    if (!newCustomer.tenant) return alert("Vui lòng nhập tên khách hàng!");
 
-  const newId = `U-${Date.now()}`;
+    const newId = `U-${Date.now()}`;
 
-  // 1. Tạo dữ liệu để gửi lên Supabase (Lưu ý: Tên cột phải là snake_case như SQL)
-  const dbRow = {
-    id: newId,
-    tenant: newCustomer.tenant,
-    location: newCustomer.location,
-    type: newCustomer.type,
-    old_index: 0,
-    new_index: 0,
-    last_month_usage: 0,
-    month: monthFilter, // Lưu vào tháng đang chọn
-    images: { old: null, new: null }
+    // 1. Tạo dữ liệu để gửi lên Supabase (Lưu ý: Tên cột phải là snake_case như SQL)
+    const dbRow = {
+      id: newId,
+      tenant: newCustomer.tenant,
+      location: newCustomer.location,
+      type: newCustomer.type,
+      old_index: 0,
+      new_index: 0,
+      last_month_usage: 0,
+      month: monthFilter, // Lưu vào tháng đang chọn
+      images: { old: null, new: null },
+    };
+
+    // 2. Tạo dữ liệu để hiển thị lên Web (React dùng camelCase)
+    const uiRow = {
+      ...dbRow,
+      oldIndex: 0, // Khớp với code hiển thị
+      newIndex: 0, // Khớp với code hiển thị
+      lastMonthUsage: 0, // Khớp với code hiển thị
+    };
+
+    // Cập nhật giao diện ngay lập tức
+    setUtilityData([uiRow, ...utilityData]);
+    setShowAddModal(false);
+    setNewCustomer({ tenant: "", location: "", type: "electricity" });
+
+    // 3. Gửi lên Supabase (QUAN TRỌNG)
+    const { error } = await supabase.from("utility_readings").insert([dbRow]);
+
+    if (error) {
+      alert("Lỗi lưu dữ liệu: " + error.message);
+      console.error(error);
+    }
   };
-
-  // 2. Tạo dữ liệu để hiển thị lên Web (React dùng camelCase)
-  const uiRow = {
-    ...dbRow,
-    oldIndex: 0,        // Khớp với code hiển thị
-    newIndex: 0,        // Khớp với code hiển thị
-    lastMonthUsage: 0   // Khớp với code hiển thị
-  };
-
-  // Cập nhật giao diện ngay lập tức
-  setUtilityData([uiRow, ...utilityData]);
-  setShowAddModal(false);
-  setNewCustomer({ tenant: "", location: "", type: "electricity" });
-
-  // 3. Gửi lên Supabase (QUAN TRỌNG)
-  const { error } = await supabase.from('utility_readings').insert([dbRow]);
-  
-  if (error) {
-    alert("Lỗi lưu dữ liệu: " + error.message);
-    console.error(error);
-  }
-};
 
   return (
     <div className="space-y-6 h-full flex flex-col">
@@ -2742,28 +2757,29 @@ const MaintenancePanel = ({ isLoggedIn, tickets, setTickets }) => {
       desc_content: currentTicket.desc,
       priority: currentTicket.priority,
       reporter: currentTicket.reporter,
-      status: currentTicket.status
+      status: currentTicket.status,
     };
 
     if (isEditing) {
       // 1. Cập nhật UI ngay
-      setTickets(tickets.map((t) => (t.id === currentTicket.id ? currentTicket : t)));
+      setTickets(
+        tickets.map((t) => (t.id === currentTicket.id ? currentTicket : t))
+      );
       // 2. Gửi lên Supabase
       const { error } = await supabase
-        .from('maintenance_tickets')
+        .from("maintenance_tickets")
         .update(ticketData)
-        .eq('id', currentTicket.id);
+        .eq("id", currentTicket.id);
       if (error) alert("Lỗi cập nhật: " + error.message);
-
     } else {
       const newId = `MT-${Date.now()}`;
       const newTicket = { ...currentTicket, id: newId };
-      
+
       // 1. Cập nhật UI
       setTickets([...tickets, newTicket]);
       // 2. Gửi lên Supabase
       const { error } = await supabase
-        .from('maintenance_tickets')
+        .from("maintenance_tickets")
         .insert([{ ...ticketData, id: newId }]);
       if (error) alert("Lỗi tạo mới: " + error.message);
     }
@@ -2777,7 +2793,10 @@ const MaintenancePanel = ({ isLoggedIn, tickets, setTickets }) => {
       // 1. Xóa trên UI
       setTickets((prev) => prev.filter((t) => t.id !== id));
       // 2. Xóa trên Supabase
-      const { error } = await supabase.from('maintenance_tickets').delete().eq('id', id);
+      const { error } = await supabase
+        .from("maintenance_tickets")
+        .delete()
+        .eq("id", id);
       if (error) alert("Lỗi xóa: " + error.message);
     }
   };
@@ -3189,22 +3208,22 @@ const MaintenancePanel = ({ isLoggedIn, tickets, setTickets }) => {
 // --- MODULE 2: SUPPORT PANEL (FIXED IMAGE UPLOAD & ADD DELETE) ---
 const SupportPanel = ({ isLoggedIn }) => {
   // 1. AUTO-SAVE: Lấy dữ liệu từ LocalStorage
- // --- STATE MỚI ---
- const [tickets, setTickets] = useState([]);
+  // --- STATE MỚI ---
+  const [tickets, setTickets] = useState([]);
 
- // Tải dữ liệu từ Supabase
- useEffect(() => {
-   const fetchSupport = async () => {
-     const { data, error } = await supabase
-       .from('support_tickets')
-       .select('*')
-       .order('created', { ascending: false });
-     
-     if (data) setTickets(data);
-     if (error) console.log("Lỗi Support:", error);
-   };
-   fetchSupport();
- }, []);
+  // Tải dữ liệu từ Supabase
+  useEffect(() => {
+    const fetchSupport = async () => {
+      const { data, error } = await supabase
+        .from("support_tickets")
+        .select("*")
+        .order("created", { ascending: false });
+
+      if (data) setTickets(data);
+      if (error) console.log("Lỗi Support:", error);
+    };
+    fetchSupport();
+  }, []);
 
   const [selectedTicketId, setSelectedTicketId] = useState(tickets[0]?.id);
   const [showForm, setShowForm] = useState(false);
@@ -3333,7 +3352,7 @@ const SupportPanel = ({ isLoggedIn }) => {
 
   const handleAddRequest = async () => {
     if (!newReq.title) return alert("Vui lòng nhập tiêu đề!");
-    
+
     const newId = `REQ-${Date.now()}`;
     const ticketObj = {
       id: newId,
@@ -3348,19 +3367,20 @@ const SupportPanel = ({ isLoggedIn }) => {
       progress: 0,
       eta: "Chờ tiếp nhận",
       rating: 0,
-      images: { before: null, during: null, after: null } // Lưu dạng JSON
+      images: { before: null, during: null, after: null }, // Lưu dạng JSON
     };
 
     // UI Update
     setTickets([ticketObj, ...tickets]);
     setShowForm(false);
-    
+
     // DB Insert
-    await supabase.from('support_tickets').insert([ticketObj]);
-    
+    await supabase.from("support_tickets").insert([ticketObj]);
+
     // Reset form
-    setNewReq({ ...newReq, title: "", desc: "" }); 
-    if (newReq.reporter) localStorage.setItem("last_reporter_name", newReq.reporter);
+    setNewReq({ ...newReq, title: "", desc: "" });
+    if (newReq.reporter)
+      localStorage.setItem("last_reporter_name", newReq.reporter);
   };
 
   const updateTicketProgress = (val) => {
@@ -4287,7 +4307,7 @@ export default function App() {
     const saved = localStorage.getItem("app_darkMode");
     return saved ? JSON.parse(saved) : false;
   });
- 
+
   // --- 5. EFFECTS: LẮNG NGHE ĐỂ LƯU (Code Mới) ---
   // Lưu đăng nhập
   useEffect(() => {
@@ -4355,37 +4375,41 @@ export default function App() {
   }, []);
 
   // --- CÁC STATE CŨ CỦA BẠN (Giữ nguyên phần còn lại) ---
- // --- STATE MỚI (Dùng Supabase) ---
- const [units, setUnits] = useState([]);
- const [maintenanceTickets, setMaintenanceTickets] = useState([]);
+  // --- STATE MỚI (Dùng Supabase) ---
+  const [units, setUnits] = useState([]);
+  const [maintenanceTickets, setMaintenanceTickets] = useState([]);
 
- // --- TẢI DỮ LIỆU TỪ SUPABASE KHI MỞ WEB ---
- useEffect(() => {
-   const fetchData = async () => {
-     // 1. Tải Sơ đồ kho (Units)
-     const { data: uData, error: uError } = await supabase.from('units').select('*');
-     if (uData && uData.length > 0) {
-       setUnits(uData);
-     } else {
-       setUnits(initialData); // Nếu DB trống thì dùng dữ liệu mẫu
-     }
+  // --- TẢI DỮ LIỆU TỪ SUPABASE KHI MỞ WEB ---
+  useEffect(() => {
+    const fetchData = async () => {
+      // 1. Tải Sơ đồ kho (Units)
+      const { data: uData, error: uError } = await supabase
+        .from("units")
+        .select("*");
+      if (uData && uData.length > 0) {
+        setUnits(uData);
+      } else {
+        setUnits(initialData); // Nếu DB trống thì dùng dữ liệu mẫu
+      }
 
-     // 2. Tải Phiếu bảo trì
-     const { data: mData, error: mError } = await supabase.from('maintenance_tickets').select('*');
-     if (mData) {
-       // Map lại tên cột từ SQL (snake_case) sang React (camelCase) cho khớp code cũ
-       const formatted = mData.map(t => ({
-         ...t,
-         unitId: t.unit_id,
-         subCategory: t.sub_category,
-         desc: t.desc_content
-       }));
-       setMaintenanceTickets(formatted);
-     }
-   };
+      // 2. Tải Phiếu bảo trì
+      const { data: mData, error: mError } = await supabase
+        .from("maintenance_tickets")
+        .select("*");
+      if (mData) {
+        // Map lại tên cột từ SQL (snake_case) sang React (camelCase) cho khớp code cũ
+        const formatted = mData.map((t) => ({
+          ...t,
+          unitId: t.unit_id,
+          subCategory: t.sub_category,
+          desc: t.desc_content,
+        }));
+        setMaintenanceTickets(formatted);
+      }
+    };
 
-   fetchData();
- }, []);
+    fetchData();
+  }, []);
 
   const [selectedUnit, setSelectedUnit] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
