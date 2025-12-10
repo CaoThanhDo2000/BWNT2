@@ -5012,7 +5012,7 @@ export default function App() {
             <FuelManagementPanel isLoggedIn={isLoggedIn} />
           ) : (
             <div className="flex h-full items-center justify-center text-slate-400">
-              Module đang cập nhật...
+              Đang chỉnh sửa thêm...
             </div>
           )}
         </div>
