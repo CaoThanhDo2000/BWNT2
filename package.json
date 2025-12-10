@@ -1,6 +1,6 @@
 {
   "name": "react",
-  "version": "1.0.0",
+  "version":"1.0.0",
   "description": "",
   "keywords": [],
   "main": "src/index.tsx",
@@ -10,13 +10,15 @@
     "react-scripts": "^5.0.0",
     "recharts": "3.5.0",
     "react-is": "19.2.0",
-    "lucide-react": "0.555.0"
+    "lucide-react": "0.555.0",
+    "@supabase/supabase-js": "^2.39.0"
   },
   "devDependencies": {
     "@types/react": "19.0.0",
     "@types/react-dom": "19.0.0",
     "loader-utils": "3.2.1",
     "typescript": "5.7.2"
+  
   },
   "scripts": {
     "start": "react-scripts start",

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import { supabase } from "./supabaseClient"; // <-- THÊM DÒNG NÀY
 import {
   BarChart,
   Bar,
@@ -1385,46 +1386,54 @@ const FuelManagementPanel = ({ isLoggedIn }) => {
   }, [newLog.startTime, newLog.endTime]);
 
   // --- SAVE LOG (CHẠY MÁY) ---
-  const handleSaveLog = () => {
-    if (!selectedMachine || !newLog.date || !newLog.duration)
-      return alert("Thiếu thông tin!");
+// Nhớ thêm từ khóa async
+const handleSaveLog = async () => {
+  if (!selectedMachine || !newLog.date || !newLog.duration)
+    return alert("Thiếu thông tin!");
 
-    let updatedLogs = [...selectedMachine.logs];
-    let fuelAdjustment = 0;
+  // --- Giữ nguyên logic tính toán cũ ---
+  let updatedLogs = [...selectedMachine.logs];
+  let fuelAdjustment = 0;
 
-    if (editingLogIndex !== null) {
-      const oldLog = updatedLogs[editingLogIndex];
-      if (oldLog.type === "run")
-        fuelAdjustment =
-          (parseInt(oldLog.consumption) || 0) -
-          (parseInt(newLog.consumption) || 0);
-      updatedLogs[editingLogIndex] = { ...newLog, type: "run" };
-    } else {
-      updatedLogs.push({ ...newLog, type: "run" });
-      fuelAdjustment = -(parseInt(newLog.consumption) || 0);
-    }
+  if (editingLogIndex !== null) {
+    const oldLog = updatedLogs[editingLogIndex];
+    if (oldLog.type === "run")
+      fuelAdjustment = (parseInt(oldLog.consumption) || 0) - (parseInt(newLog.consumption) || 0);
+    updatedLogs[editingLogIndex] = { ...newLog, type: "run" };
+  } else {
+    updatedLogs.push({ ...newLog, type: "run" });
+    fuelAdjustment = -(parseInt(newLog.consumption) || 0);
+  }
 
-    const updatedMachine = {
-      ...selectedMachine,
-      current: selectedMachine.current + fuelAdjustment,
-      logs: updatedLogs,
-    };
-    setFuelData((prev) =>
-      prev.map((m) => (m.id === selectedMachine.id ? updatedMachine : m))
-    );
-    setShowLogModal(false);
-    setNewLog({
-      date: "",
-      startTime: "",
-      endTime: "",
-      duration: 0,
-      consumption: 0,
-      operator: "",
-      note: "",
-      images: [],
-    });
-    setEditingLogIndex(null);
+  const updatedMachine = {
+    ...selectedMachine,
+    current: selectedMachine.current + fuelAdjustment,
+    logs: updatedLogs,
   };
+  // -------------------------------------
+
+  // 1. Cập nhật UI
+  setFuelData((prev) =>
+    prev.map((m) => (m.id === selectedMachine.id ? updatedMachine : m))
+  );
+
+  // 2. Gửi lên Supabase - THÊM ĐOẠN NÀY
+  // Ta cập nhật lại mức dầu hiện tại (current_level) và toàn bộ mảng lịch sử (logs)
+  const { error } = await supabase
+    .from('fuel_logs')
+    .update({
+      current_level: updatedMachine.current,
+      logs: updatedMachine.logs // Supabase tự lưu mảng này vào cột jsonb
+    })
+    .eq('id', selectedMachine.id);
+
+  if (error) alert("Lỗi lưu: " + error.message);
+
+  setShowLogModal(false);
+  // Reset form
+  setNewLog({ date: "", startTime: "", endTime: "", duration: 0, consumption: 0, operator: "", note: "", images: [] });
+  setEditingLogIndex(null);
+};
 
   // --- SAVE REFUEL (CHÂM DẦU) ---
   const handleAddRefuel = () => {
@@ -2093,20 +2102,27 @@ const UtilityPanel = ({ isLoggedIn }) => {
 
   // 2. AUTO-SAVE & INIT DATA
   // Tự động gán tháng "2025-10" cho dữ liệu cũ chưa có trường 'month'
-  const [utilityData, setUtilityData] = useState(() => {
-    const saved = localStorage.getItem("bw_utility_data");
-    let data = saved ? JSON.parse(saved) : INITIAL_UTILITY_DATA;
+// --- Code cũ: const [utilityData...] = useState(localStorage...)  <-- XÓA CÁI NÀY
+// --- Code mới:
+const [utilityData, setUtilityData] = useState([]);
 
-    // Migration: Nếu dữ liệu cũ chưa có tháng, gán mặc định tháng 10
-    return data.map((item) => ({
-      ...item,
-      month: item.month || "2025-10",
-    }));
-  });
-
-  useEffect(() => {
-    localStorage.setItem("bw_utility_data", JSON.stringify(utilityData));
-  }, [utilityData]);
+useEffect(() => {
+  const fetchUtility = async () => {
+    const { data, error } = await supabase.from('utility_readings').select('*');
+    if (data) {
+      // Chuyển đổi tên cột từ SQL (snake_case) sang React (camelCase)
+      const formatted = data.map(item => ({
+        ...item,
+        oldIndex: item.old_index,
+        newIndex: item.new_index,
+        lastMonthUsage: item.last_month_usage
+      }));
+      setUtilityData(formatted);
+    }
+    if (error) console.log("Lỗi tải điện nước:", error);
+  };
+  fetchUtility();
+}, []);
 
   // 3. LỌC DỮ LIỆU THEO THÁNG & LOẠI
   const filteredData = utilityData.filter((item) => {
@@ -2130,18 +2146,25 @@ const UtilityPanel = ({ isLoggedIn }) => {
     .reduce((a, b) => a + (b.newIndex - b.oldIndex), 0);
 
   // --- HÀM CẬP NHẬT DỮ LIỆU ---
-  const handleValueChange = (id, field, value) => {
-    setUtilityData((prev) =>
-      prev.map((item) =>
-        item.id === id ? { ...item, [field]: parseInt(value) || 0 } : item
-      )
-    );
-  };
+  // Nhớ thêm từ khóa async
+  const handleValueChange = async (id, field, value) => {
+    const newValue = parseInt(value) || 0;
 
-  const handleTextChange = (id, field, value) => {
+    // 1. Cập nhật giao diện (UI)
     setUtilityData((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+      prev.map((item) => (item.id === id ? { ...item, [field]: newValue } : item))
     );
+
+    // 2. Chuẩn bị tên cột cho khớp với SQL (SQL dùng snake_case)
+    let dbField = field;
+    if (field === 'oldIndex') dbField = 'old_index';
+    if (field === 'newIndex') dbField = 'new_index';
+    
+    // 3. Gửi lên Supabase - THÊM ĐOẠN NÀY
+    await supabase
+      .from('utility_readings')
+      .update({ [dbField]: newValue })
+      .eq('id', id);
   };
 
   // --- HÀM XỬ LÝ ẢNH (BASE64) ---
@@ -2173,23 +2196,46 @@ const UtilityPanel = ({ isLoggedIn }) => {
   };
 
   // --- HÀM THÊM KHÁCH HÀNG MỚI (Tự động gán vào tháng đang chọn) ---
-  const handleAddCustomer = () => {
-    if (!newCustomer.tenant) return alert("Vui lòng nhập tên khách hàng!");
-    setUtilityData([
-      {
-        id: `U-${Date.now()}`, // ID duy nhất theo thời gian
-        ...newCustomer,
-        oldIndex: 0,
-        newIndex: 0,
-        lastMonthUsage: 0, // Mặc định
-        month: monthFilter, // QUAN TRỌNG: Gán vào tháng đang lọc
-        images: { old: null, new: null },
-      },
-      ...utilityData,
-    ]);
-    setShowAddModal(false);
-    setNewCustomer({ tenant: "", location: "", type: "electricity" });
+// --- HÀM THÊM KHÁCH HÀNG MỚI (ĐÃ SỬA ĐỔI ĐỂ LƯU SUPABASE) ---
+const handleAddCustomer = async () => {
+  if (!newCustomer.tenant) return alert("Vui lòng nhập tên khách hàng!");
+
+  const newId = `U-${Date.now()}`;
+
+  // 1. Tạo dữ liệu để gửi lên Supabase (Lưu ý: Tên cột phải là snake_case như SQL)
+  const dbRow = {
+    id: newId,
+    tenant: newCustomer.tenant,
+    location: newCustomer.location,
+    type: newCustomer.type,
+    old_index: 0,
+    new_index: 0,
+    last_month_usage: 0,
+    month: monthFilter, // Lưu vào tháng đang chọn
+    images: { old: null, new: null }
   };
+
+  // 2. Tạo dữ liệu để hiển thị lên Web (React dùng camelCase)
+  const uiRow = {
+    ...dbRow,
+    oldIndex: 0,        // Khớp với code hiển thị
+    newIndex: 0,        // Khớp với code hiển thị
+    lastMonthUsage: 0   // Khớp với code hiển thị
+  };
+
+  // Cập nhật giao diện ngay lập tức
+  setUtilityData([uiRow, ...utilityData]);
+  setShowAddModal(false);
+  setNewCustomer({ tenant: "", location: "", type: "electricity" });
+
+  // 3. Gửi lên Supabase (QUAN TRỌNG)
+  const { error } = await supabase.from('utility_readings').insert([dbRow]);
+  
+  if (error) {
+    alert("Lỗi lưu dữ liệu: " + error.message);
+    console.error(error);
+  }
+};
 
   return (
     <div className="space-y-6 h-full flex flex-col">
@@ -2683,32 +2729,56 @@ const MaintenancePanel = ({ isLoggedIn, tickets, setTickets }) => {
     setShowForm(true);
   };
 
-  const handleSaveTicket = () => {
+  const handleSaveTicket = async () => {
     if (!currentTicket.unitId || !currentTicket.category)
       return alert("Vui lòng điền đầy đủ thông tin!");
+
+    // Chuẩn bị dữ liệu (mapping sang tên cột SQL snake_case)
+    const ticketData = {
+      unit_id: currentTicket.unitId,
+      date: currentTicket.date,
+      category: currentTicket.category,
+      sub_category: currentTicket.subCategory,
+      desc_content: currentTicket.desc,
+      priority: currentTicket.priority,
+      reporter: currentTicket.reporter,
+      status: currentTicket.status
+    };
+
     if (isEditing) {
-      setTickets(
-        tickets.map((t) => (t.id === currentTicket.id ? currentTicket : t))
-      );
+      // 1. Cập nhật UI ngay
+      setTickets(tickets.map((t) => (t.id === currentTicket.id ? currentTicket : t)));
+      // 2. Gửi lên Supabase
+      const { error } = await supabase
+        .from('maintenance_tickets')
+        .update(ticketData)
+        .eq('id', currentTicket.id);
+      if (error) alert("Lỗi cập nhật: " + error.message);
+
     } else {
-      const newId = `MT-${String(tickets.length + 1).padStart(3, "0")}`;
-      const ticketToAdd = { ...currentTicket, id: newId };
-      if (currentTicket.reporter)
-        localStorage.setItem("last_reporter_name", currentTicket.reporter);
-      setTickets([...tickets, ticketToAdd]);
+      const newId = `MT-${Date.now()}`;
+      const newTicket = { ...currentTicket, id: newId };
+      
+      // 1. Cập nhật UI
+      setTickets([...tickets, newTicket]);
+      // 2. Gửi lên Supabase
+      const { error } = await supabase
+        .from('maintenance_tickets')
+        .insert([{ ...ticketData, id: newId }]);
+      if (error) alert("Lỗi tạo mới: " + error.message);
     }
     setShowForm(false);
   };
 
   // --- HÀM XÓA PHIẾU ---
-  const handleDeleteTicket = (e, id) => {
-    e.stopPropagation(); // Ngăn chặn sự kiện click lan ra thẻ cha (không mở modal edit)
-    if (
-      window.confirm(
-        `Bạn có chắc muốn xóa phiếu ${id} không? Hành động này không thể hoàn tác.`
-      )
-    ) {
+  const handleDeleteTicket = async (e, id) => {
+    e.stopPropagation();
+    if (window.confirm(`Bạn có chắc muốn xóa phiếu ${id} không?`)) {
+      // 1. Xóa trên UI
       setTickets((prev) => prev.filter((t) => t.id !== id));
+      // 2. Xóa trên Supabase
+      const { error } = await supabase.from('maintenance_tickets').delete().eq('id', id);
+      if (error) alert("Lỗi xóa: " + error.message);
     }
   };
 
@@ -3119,15 +3189,22 @@ const MaintenancePanel = ({ isLoggedIn, tickets, setTickets }) => {
 // --- MODULE 2: SUPPORT PANEL (FIXED IMAGE UPLOAD & ADD DELETE) ---
 const SupportPanel = ({ isLoggedIn }) => {
   // 1. AUTO-SAVE: Lấy dữ liệu từ LocalStorage
-  const [tickets, setTickets] = useState(() => {
-    const saved = localStorage.getItem("bw_support_tickets");
-    return saved ? JSON.parse(saved) : SUPPORT_TICKETS;
-  });
+ // --- STATE MỚI ---
+ const [tickets, setTickets] = useState([]);
 
-  // 2. AUTO-SAVE: Lưu mỗi khi tickets thay đổi
-  useEffect(() => {
-    localStorage.setItem("bw_support_tickets", JSON.stringify(tickets));
-  }, [tickets]);
+ // Tải dữ liệu từ Supabase
+ useEffect(() => {
+   const fetchSupport = async () => {
+     const { data, error } = await supabase
+       .from('support_tickets')
+       .select('*')
+       .order('created', { ascending: false });
+     
+     if (data) setTickets(data);
+     if (error) console.log("Lỗi Support:", error);
+   };
+   fetchSupport();
+ }, []);
 
   const [selectedTicketId, setSelectedTicketId] = useState(tickets[0]?.id);
   const [showForm, setShowForm] = useState(false);
@@ -3254,24 +3331,36 @@ const SupportPanel = ({ isLoggedIn }) => {
     return matchMonth && matchPriority && matchStatus;
   });
 
-  const handleAddRequest = () => {
+  const handleAddRequest = async () => {
     if (!newReq.title) return alert("Vui lòng nhập tiêu đề!");
-    const ticket = {
-      ...newReq,
-      id: `REQ-${String(tickets.length + 1).padStart(3, "0")}`,
+    
+    const newId = `REQ-${Date.now()}`;
+    const ticketObj = {
+      id: newId,
+      title: newReq.title,
+      location: newReq.location,
+      category: newReq.category,
+      type: newReq.type,
+      description: newReq.desc,
+      reporter: newReq.reporter,
+      created: newReq.created.replace("T", " "),
       status: "pending",
       progress: 0,
       eta: "Chờ tiếp nhận",
-      feedback: null,
       rating: 0,
-      images: { before: null, during: null, after: null },
-      created: newReq.created.replace("T", " "),
+      images: { before: null, during: null, after: null } // Lưu dạng JSON
     };
-    if (newReq.reporter)
-      localStorage.setItem("last_reporter_name", newReq.reporter);
-    setTickets([ticket, ...tickets]);
+
+    // UI Update
+    setTickets([ticketObj, ...tickets]);
     setShowForm(false);
-    setSelectedTicketId(ticket.id);
+    
+    // DB Insert
+    await supabase.from('support_tickets').insert([ticketObj]);
+    
+    // Reset form
+    setNewReq({ ...newReq, title: "", desc: "" }); 
+    if (newReq.reporter) localStorage.setItem("last_reporter_name", newReq.reporter);
   };
 
   const updateTicketProgress = (val) => {
@@ -4198,18 +4287,7 @@ export default function App() {
     const saved = localStorage.getItem("app_darkMode");
     return saved ? JSON.parse(saved) : false;
   });
-  const [maintenanceTickets, setMaintenanceTickets] = useState(() => {
-    const saved = localStorage.getItem("bw_maintenance_tickets");
-    return saved ? JSON.parse(saved) : MAINTENANCE_TICKETS;
-  });
-
-  // Tự động lưu khi có thay đổi
-  useEffect(() => {
-    localStorage.setItem(
-      "bw_maintenance_tickets",
-      JSON.stringify(maintenanceTickets)
-    );
-  }, [maintenanceTickets]);
+ 
   // --- 5. EFFECTS: LẮNG NGHE ĐỂ LƯU (Code Mới) ---
   // Lưu đăng nhập
   useEffect(() => {
@@ -4277,14 +4355,37 @@ export default function App() {
   }, []);
 
   // --- CÁC STATE CŨ CỦA BẠN (Giữ nguyên phần còn lại) ---
-  const [units, setUnits] = useState(() => {
-    const saved = localStorage.getItem("bw_master_plan_v2");
-    return saved ? JSON.parse(saved) : initialData;
-  });
+ // --- STATE MỚI (Dùng Supabase) ---
+ const [units, setUnits] = useState([]);
+ const [maintenanceTickets, setMaintenanceTickets] = useState([]);
 
-  useEffect(() => {
-    localStorage.setItem("bw_master_plan_v2", JSON.stringify(units));
-  }, [units]);
+ // --- TẢI DỮ LIỆU TỪ SUPABASE KHI MỞ WEB ---
+ useEffect(() => {
+   const fetchData = async () => {
+     // 1. Tải Sơ đồ kho (Units)
+     const { data: uData, error: uError } = await supabase.from('units').select('*');
+     if (uData && uData.length > 0) {
+       setUnits(uData);
+     } else {
+       setUnits(initialData); // Nếu DB trống thì dùng dữ liệu mẫu
+     }
+
+     // 2. Tải Phiếu bảo trì
+     const { data: mData, error: mError } = await supabase.from('maintenance_tickets').select('*');
+     if (mData) {
+       // Map lại tên cột từ SQL (snake_case) sang React (camelCase) cho khớp code cũ
+       const formatted = mData.map(t => ({
+         ...t,
+         unitId: t.unit_id,
+         subCategory: t.sub_category,
+         desc: t.desc_content
+       }));
+       setMaintenanceTickets(formatted);
+     }
+   };
+
+   fetchData();
+ }, []);
 
   const [selectedUnit, setSelectedUnit] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
